@@ -5,28 +5,27 @@
 #include <pthread.h>
 #include <queue>
 #include <vector>
-#include "../lock/lock.h"
+#include "lock.h"
+#include "global.h"
 
 template<typename T>
 class ThreadPool {
 public:
-    using size_t = unsigned;
-    enum mode {REACTOR, PROACTOR};
-    ThreadPool(mode actor_mode, size_t thread_num = 8, size_t max_requests = 10000);
-    ~ThreadPool() {}
+    ThreadPool(MODE actor_mode, int thread_num = 8, int max_requests = 10000);
+    ~ThreadPool() { }
     // 增加带状态任务
     bool append(T *request, int stat);
     // 增加任务
-    bool append_req(T *request);
+    bool append(T *request);
 
 private:
     // 工作线程函数
     static void *worker(void *arg); 
     void run();
 
-    mode m_actor_mode; // IO模型
-    size_t m_thread_num; // 线程数
-    size_t m_max_requests; // 请求队列的最大容量
+    MODE m_actor_mode; // IO模型
+    int m_thread_num; // 线程数
+    int m_max_requests; // 请求队列的最大容量
     std::vector<pthread_t> m_threads; // 线程池数组
     std::queue<T *> m_workqueue; // 请求队列
     Locker m_queuelocker; // 请求队列锁
@@ -35,11 +34,11 @@ private:
 };
 
 template<typename T>
-ThreadPool<T>::ThreadPool(mode actor_mode, size_t thread_num = 8, size_t max_requests = 10000)
+ThreadPool<T>::ThreadPool(MODE actor_mode, int thread_num, int max_requests)
 : m_actor_mode(actor_mode), m_thread_num(thread_num), m_max_requests(max_requests)
 {
     m_threads.resize(m_thread_num);
-    for (size_t i = 0; i < thread_num; ++i) {
+    for (int i = 0; i < m_thread_num; ++i) {
         // pthread_create要求线程函数为静态成员函数
         // 非静态成员函数会默认传递this指针导致参数不匹配
         if (pthread_create(&m_threads[i], nullptr, worker, this) != 0) {
@@ -69,7 +68,7 @@ bool ThreadPool<T>::append(T *request, int stat)
 }
 
 template <typename T> 
-bool ThreadPool<T>::append_req(T *request)
+bool ThreadPool<T>::append(T *request)
 {
     m_queuelocker.lock();
     // 请求数超出
@@ -110,10 +109,12 @@ void ThreadPool<T>::run()
         if (!request) 
             continue;
         if (m_actor_mode == PROACTOR) {
-            // proactor逻辑
+            request->process();
+            // proactor逻辑，即由主线程完成了IO工作
         }
         else {
-            // reactor逻辑
+            // reactor逻辑，由工作线程各自完成IO
+
         }
     }
 }

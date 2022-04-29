@@ -1,20 +1,14 @@
 #include "httpconn.h"
 
-struct RepInfo {
-    const char *title;
-    const char *form;
-    RepInfo(const char *_t, const char *_f = nullptr) : title(_t), form(_f) {}
-};
-
-RepInfo ok_200("OK");
-RepInfo error_400("Bad Request", "Your request has bad syntax or is inherently impossible to satisfy.\n");
-RepInfo error_403("Forbidden", "You do not have permission to get file from this server.\n");
-RepInfo error_404("Not Found", "The requested file was not found on this server.\n");
-RepInfo error_500("Internal Error", "There was an unusual problem serving the requested file.\n");
 // 网站根目录
+static RepInfo ok_200 = RepInfo("2333");
+static RepInfo error_400("Bad Request", "Your request has bad syntax or is inherently impossible to satisfy.\n");
+static RepInfo error_403("Forbidden", "You do not have permission to get file from this server.\n");
+static RepInfo error_404("Not Found", "The requested file was not found on this server.\n");
+static RepInfo error_500("Internal Error", "There was an unusual problem serving the requested file.\n");
 const char *doc_root = "../root";
 
-int setnonblocking(int fd)
+int EpollControl::setnonblocking(int fd)
 {
     int old_option = fcntl(fd, F_GETFL);
     int new_option = old_option | O_NONBLOCK;
@@ -22,56 +16,61 @@ int setnonblocking(int fd)
     return old_option;
 }
 
-void addfd(int epollfd, int fd, bool oneshot) 
+void EpollControl::addfd(int fd, TRI_MODE tmode, bool oneshot)
 {
     struct epoll_event event;
+    event.events = EPOLLIN | EPOLLRDHUP;
     event.data.fd = fd;
     // 关心收到数据和对方关闭连接事件，设定ET模式
-    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+    if (tmode == ET)
+        event.events |= EPOLLET;
     if (oneshot) {
         // 只会触发一次事件
         // 除非使用epoll_ctl函数重置该文件描述符上注册的EPOLLONESHOT事件
         event.events |= EPOLLONESHOT;
     }
-    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
+    epoll_ctl(getfd(), EPOLL_CTL_ADD, fd, &event);
     setnonblocking(fd);
 }
 
-void removefd(int epollfd, int fd) 
+void EpollControl::removefd(int fd) 
 {
-    epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
+    epoll_ctl(getfd(), EPOLL_CTL_DEL, fd, 0);
     close(fd);
 }
 
-void modfd(int epollfd, int fd, int ev) 
+void EpollControl::modfd(int fd, int ev) 
 {
     epoll_event event;
     event.data.fd = fd;
     event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
-    epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
+    epoll_ctl(getfd(), EPOLL_CTL_MOD, fd, &event);
 }
 
 int HTTPConn::m_user_count = 0;
-int HTTPConn::m_epollfd = -1;
+EpollControl HTTPConn::m_epoller = EpollControl();
 
-void HTTPConn::close_conn(bool real_close = true) 
+void HTTPConn::close_conn(bool real_close) 
 {
     if (real_close && (m_sockfd != -1)) {
-        removefd(m_epollfd, m_sockfd);
+        m_epoller.removefd(m_sockfd);
         m_sockfd = -1;
         m_user_count--;
     }
 }
 
-void HTTPConn::init(int sockfd, const sockaddr_in &addr)
+void HTTPConn::init(int sockfd, const sockaddr_in &addr, ACTOR_MODE amode, TRI_MODE tmode)
 {
     m_sockfd = sockfd;
     m_address = addr;
     // 下面的代码是用于取消关闭连接时的TIME_WAIT状态
+    #ifdef DEBUG_MODE
     int reuse = 1;
     setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof reuse);
+    #endif
+    m_actor_mode = amode;
 
-    addfd(m_epollfd, sockfd, true);
+    m_epoller.addfd(sockfd, tmode);
     m_user_count++;
     init();
 }
@@ -133,19 +132,31 @@ bool HTTPConn::read()
     if (m_read_idx >= READ_BUFFER_SIZE)
         return false;
     int bytes_read = 0;
-    while (true) {
+    // LT模式，只读取一次数据
+    if (m_actor_mode == REACTOR) {
         bytes_read = recv(m_sockfd, m_read_buf + m_read_idx,
                           READ_BUFFER_SIZE - m_read_idx, 0);
-        if (bytes_read == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                break;
-            return false;
-        }
-        else if (bytes_read == 0)
+        if (bytes_read <= 0)
             return false;
         m_read_idx += bytes_read;
+        return true;
     }
-    return true;
+    // ET模式，循环读取直到全部读取完成
+    else {
+        while (true) {
+            bytes_read = recv(m_sockfd, m_read_buf + m_read_idx,
+                            READ_BUFFER_SIZE - m_read_idx, 0);
+            if (bytes_read == -1) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    break;
+                return false;
+            }
+            else if (bytes_read == 0)
+                return false;
+            m_read_idx += bytes_read;
+        }
+        return true;
+    }
 }
 
 // 解析HTTP请求行
@@ -247,9 +258,10 @@ HTTPConn::HTTP_CODE HTTPConn::process_read()
     while (((m_check_state == CHECK_STATE_CONTENT) && (linestatus = LINE_OK))
         || ((linestatus = parse_line()) == LINE_OK)) {
         // startline为行在buffer中的开始位置
-        text = m_read_buf + m_start_line;
+        text = get_line();
         m_start_line = m_checked_idx;
         printf("http line: %s\n", text);
+
         switch (m_check_state) {
             // 分析请求行
             case CHECK_STATE_REQUESTLINE: {
@@ -263,8 +275,9 @@ HTTPConn::HTTP_CODE HTTPConn::process_read()
                 retcode = parse_headers(text);
                 if (retcode == BAD_REQUEST)
                     return BAD_REQUEST;
-                else if (retcode == GET_REQUEST) 
+                else if (retcode == GET_REQUEST) {
                     return do_request();
+                }
                 break;
             }
             case CHECK_STATE_CONTENT: {
@@ -293,8 +306,9 @@ HTTPConn::HTTP_CODE HTTPConn::do_request()
     int len = strlen(doc_root);
     // 拼接请求的URL和网站根目录
     strncpy(m_real_file + len, m_url, FILENAME_LEN - len - 1);
-    if (stat(m_real_file, &m_file_stat) < 0)
+    if (stat(m_real_file, &m_file_stat) < 0) {
         return NO_RESOURCE;
+    }
     if (!(m_file_stat.st_mode & S_IROTH)) // 其他用户组的读权限
         return FORBIDDEN_REQUEST;
     if (S_ISDIR(m_file_stat.st_mode))
@@ -323,7 +337,7 @@ bool HTTPConn::write()
     int bytes_to_send = m_write_idx;
     if (bytes_to_send == 0) {
         // 即发送完成
-        modfd(m_epollfd, m_sockfd, EPOLLIN);
+        m_epoller.modfd(m_sockfd, EPOLLIN);
         init();
         return true;
     }
@@ -332,7 +346,7 @@ bool HTTPConn::write()
         if (temp <= -1) {
             // 若写缓存满，等待下一轮EPOLLOUT事件
             if (errno == EAGAIN) {
-                modfd(m_epollfd, m_sockfd, EPOLLOUT);
+                m_epoller.modfd(m_sockfd, EPOLLOUT);
                 return true;
             }
             unmap();
@@ -346,11 +360,11 @@ bool HTTPConn::write()
             unmap();
             if (m_linger) {
                 init();
-                modfd(m_epollfd, m_sockfd, EPOLLIN);
+                m_epoller.modfd(m_sockfd, EPOLLIN);
                 return true;
             }
             else {
-                modfd(m_epollfd, m_sockfd, EPOLLIN);
+                m_epoller.modfd(m_sockfd, EPOLLIN);
                 return false;
             }
         }
@@ -382,9 +396,7 @@ bool HTTPConn::add_status_line(int status, const char *title)
 
 bool HTTPConn::add_headers(int content_len)
 {
-    add_content_length(content_len);
-    add_linger();
-    add_blank_line();
+    return add_content_length(content_len) && add_linger() && add_blank_line();
 }
 
 bool HTTPConn::add_content_length(int content_length)
@@ -405,6 +417,11 @@ bool HTTPConn::add_blank_line()
 bool HTTPConn::add_content(const char *content)
 {
     return add_response("%s", content);
+}
+
+bool HTTPConn::add_content_type() 
+{
+    return add_response("Content-Type: %s\r\n", "text/html");
 }
 
 // 根据服务器处理请求的结果返回给客户端
@@ -474,12 +491,30 @@ void HTTPConn::process()
     HTTP_CODE read_ret = process_read();
     // 若未读取完整，则重新注册EPOLLIN事件继续检测其输入事件
     if (read_ret == NO_REQUEST) {
-        modfd(m_epollfd, m_sockfd, EPOLLIN);
+        m_epoller.modfd(m_sockfd, EPOLLIN);
         return;
     }
     bool write_ret = process_write(read_ret);
     if (!write_ret) {
         close_conn(); // 默认是断开连接并关闭socket
     }
-    modfd(m_epollfd, m_sockfd, EPOLLOUT);
+    m_epoller.modfd(m_sockfd, EPOLLOUT);
+}
+
+bool HTTPReq::do_request() 
+{
+    if (m_httpconn->m_actor_mode == ACTOR_MODE::REACTOR) {
+        if (m_state == READ) {
+            if (m_httpconn->read()) {
+                m_httpconn->process();
+            }
+        }
+        else if (m_state == WRITE){
+            m_httpconn->write();
+        }
+    }
+    else {
+        m_httpconn->process();
+    }
+    return true;
 }

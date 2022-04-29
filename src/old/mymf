@@ -1,0 +1,19 @@
+compile = g++
+verison = c++11
+options = -std=$(verison) -O2
+
+all: main.o httpconn.o
+	$(compile) main.o httpconn.o -lpthread -o server
+	rm -f *.o
+
+server.o: main.cpp
+	$(compile) main.cpp $(options) -c -o main.o
+
+httpconn.o: ./http/httpconn.cpp ./http/httpconn.h
+	$(compile) ./http/httpconn.cpp $(options) -c -o httpconn.o
+
+.PONEY: clean
+clean:
+	rm -f *.o server
+	
+	

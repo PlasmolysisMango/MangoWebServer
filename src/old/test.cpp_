@@ -1,0 +1,30 @@
+#include "cpp14_threadpool.h"
+#include <string>
+#include <iostream>
+#include <vector>
+
+class PrintWork: public WorkRequest {
+public:
+    PrintWork() {}
+    PrintWork(const std::string &text, int state): m_text(text), m_state(state) {}
+    bool do_request() override {
+        if (m_state)
+            std::cout << m_text << std::endl;
+        else
+            std::cout << "error" << std::endl;
+        return true;
+    }
+
+private:
+    std::string m_text;
+    int m_state;
+};
+
+int main()
+{
+    ThreadPool &pool = ThreadPool::getInstance();
+    for (int i = 0; i < 5; ++i) {
+        std::string s = "text: " + std::to_string(i);
+        pool.appendReq(std::make_shared<PrintWork>(s, i%2));
+    }
+}
