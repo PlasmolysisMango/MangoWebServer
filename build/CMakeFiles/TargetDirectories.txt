@@ -1,3 +1,0 @@
-/home/jack/Documents/MangoWebServer/build/CMakeFiles/rebuild_cache.dir
-/home/jack/Documents/MangoWebServer/build/CMakeFiles/edit_cache.dir
-/home/jack/Documents/MangoWebServer/build/CMakeFiles/server.dir

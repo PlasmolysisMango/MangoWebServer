@@ -1,1 +1,0 @@
-/usr/bin/c++   -std=c++14 -g  -rdynamic CMakeFiles/server.dir/main.cpp.o CMakeFiles/server.dir/src/httpconn.cpp.o CMakeFiles/server.dir/src/threadpool.cpp.o  -o server  -lpthread 
