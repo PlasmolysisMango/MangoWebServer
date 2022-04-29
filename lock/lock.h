@@ -1,0 +1,93 @@
+#ifndef LOCK_H
+#define LOCK_H
+
+#include <semaphore.h>
+#include <pthread.h>
+#include <stdexcept>
+
+// RAII 封装信号量
+class Sem {
+    sem_t m_sem;
+public:
+    Sem() {
+        if (sem_init(&m_sem, 0, 0) != 0) {
+            throw std::runtime_error("sem_init error");
+        }
+    }
+    Sem(unsigned int num) {
+        if (sem_init(&m_sem, 0, num) != 0) {
+            throw std::runtime_error("sem_init error");
+        }
+    }
+    ~Sem() {
+        if (sem_destroy(&m_sem) != 0) {
+            throw std::runtime_error("sem_destory error");
+        }
+    }
+    bool wait() {
+        return sem_wait(&m_sem) == 0;
+    }
+    bool post() {
+        return sem_post(&m_sem) == 0;
+    }
+};
+
+// RAII 封装线程互斥锁
+class Locker {
+    pthread_mutex_t m_mutex;
+public:
+    Locker() {
+        if (pthread_mutex_init(&m_mutex, NULL) != 0) 
+            throw std::runtime_error("pthread_mutex_init error");
+    }
+    ~Locker() {
+        if (pthread_mutex_destroy(&m_mutex) != 0) 
+            throw std::runtime_error("pthread_mutex_destory error");
+    }
+    bool lock() {
+        return pthread_mutex_lock(&m_mutex) == 0;
+    }
+    bool unlock() {
+        return pthread_mutex_unlock(&m_mutex) == 0;
+    }
+    pthread_mutex_t *get_mutex() {
+        return &m_mutex;
+    }
+};
+
+// RAII 封装条件变量
+class Cond {
+    pthread_cond_t m_cond;
+public:
+    Cond() {
+        if (pthread_cond_init(&m_cond, NULL) != 0) 
+            throw std::runtime_error("pthread_cond_init error");
+    }
+    ~Cond() {
+        if (pthread_cond_destroy(&m_cond) != 0) 
+            throw std::runtime_error("pthread_cond_destory");
+    }
+    bool wait(pthread_mutex_t *mutex) {
+        pthread_mutex_lock(mutex);
+        int ret = pthread_cond_wait(&m_cond, mutex);
+        pthread_mutex_unlock(mutex);
+        return ret == 0;
+    }
+    // 按时间戳等待条件变量，若到达时间戳则自动返回
+    bool timewait(pthread_mutex_t *mutex, struct timespec t) {
+        pthread_mutex_lock(mutex);
+        int ret = pthread_cond_timedwait(&m_cond, mutex, &t);
+        pthread_mutex_unlock(mutex);
+        return ret == 0;
+    }
+    // 单播：至少唤醒一个等待中的线程
+    bool signal() {
+        return pthread_cond_signal(&m_cond);
+    }
+    // 广播：唤醒全部等待中的线程
+    bool broadcast() {
+        return pthread_cond_broadcast(&m_cond);
+    }
+};
+
+#endif
