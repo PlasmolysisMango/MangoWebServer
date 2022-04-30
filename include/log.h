@@ -1,3 +1,6 @@
+/* 除非是模板类、模板函数或者内联函数，否则不要在.h中实现定义
+否则如果头文件被多次包含，会出现重复定义的错误（即使头文件中避免重复包含也是一样） */
+
 #ifndef LOG_H
 #define LOG_H
 
@@ -23,6 +26,7 @@ public:
     }
     // 保证析构时缓冲区的日志均已经输出
     ~Log();
+
     Log(const Log &) = delete;
     Log &operator=(const Log &) = delete;
     Log(Log &&) = delete;
@@ -60,7 +64,7 @@ private:
     std::condition_variable m_cv;
 
     // 日志的路径和文件名
-    std::string m_dir = "./";
+    std::string m_dir = "../";
     std::string m_name = "log";
     // 异步开关
     bool m_async = false;
@@ -110,7 +114,7 @@ void LOG_DEBUG(const std::string &fmt, Args &&...args)
     Log::getInstance().write_log(Log::DEBUG, fmt, std::forward<Args>(args)...);
 }
 
-void Log::config(const std::string &dir, const std::string &name, bool isAsync,
+inline void Log::config(const std::string &dir, const std::string &name, bool isAsync,
                  size_t maxitems, bool split, size_t maxlength, 
                  size_t cachetime, size_t cachesize, bool print)
 {
@@ -171,12 +175,12 @@ void Log::write_log(Log::LOG_LEVEL lv, const std::string &fmt, Args &&...args)
     }
 }
 
-void Log::asyncWork()
+inline void Log::asyncWork()
 {
     getInstance().asyncSave();
 }
 
-void Log::syncSave(const std::string &s)
+inline void Log::syncSave(const std::string &s)
 {
     if (!m_curfile.is_open() || 
     (m_isSplit && m_curlogidx >= m_maxlogitems)) {
@@ -200,7 +204,7 @@ void Log::syncSave(const std::string &s)
         m_curfile.close();
 }
 
-void Log::asyncSave()
+inline void Log::asyncSave()
 {
     while (true) {
         std::unique_lock<std::mutex> ulk(m_mutex);
@@ -218,7 +222,7 @@ void Log::asyncSave()
     }
 }
 
-Log::~Log()
+inline Log::~Log()
 {
     if (m_async) {
         m_shutdown = true;
@@ -228,5 +232,6 @@ Log::~Log()
     if (m_curfile.is_open())
         m_curfile.close();
 }
+
 
 #endif

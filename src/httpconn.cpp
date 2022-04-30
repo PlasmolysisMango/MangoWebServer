@@ -1,4 +1,5 @@
 #include "httpconn.h"
+#include "log.h"
 
 // 网站根目录
 static RepInfo ok_200 = RepInfo("2333");
@@ -231,7 +232,7 @@ HTTPConn::HTTP_CODE HTTPConn::parse_headers(char *text)
         m_host = text;
     }
     else {
-        printf("Can't handle this header: %s\n", text);
+        LOG_WARN("Can't handle this header: %s", text);
     }
     return NO_REQUEST;
 }
@@ -260,7 +261,7 @@ HTTPConn::HTTP_CODE HTTPConn::process_read()
         // startline为行在buffer中的开始位置
         text = get_line();
         m_start_line = m_checked_idx;
-        printf("http line: %s\n", text);
+        LOG_INFO("http line: %s", text);
 
         switch (m_check_state) {
             // 分析请求行

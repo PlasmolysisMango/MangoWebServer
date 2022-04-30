@@ -19,7 +19,6 @@
 #include <sys/uio.h>
 #include <stdarg.h>
 #include <errno.h>
-// #include "global.h"
 #include "threadpool.h"
 
 struct RepInfo {

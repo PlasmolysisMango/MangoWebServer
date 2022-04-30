@@ -48,17 +48,18 @@ int main(int argc, char *argv[])
     Log::getInstance().setPrint();
     const char *ip = argv[1];
     int port = atoi(argv[2]);
-    LOG_INFO("%d", 5);
+    LOG_INFO("Binding server @%s:%d", ip, port);
     // 向某个已被关闭或未连接的socket发送数据时，产生SIGPIPE信号
     // 默认处理方式是终止进程，在这里忽略掉该信号
     addsig(SIGPIPE, SIG_IGN);
     // 获取单例ThreadPool
     auto &pool = ThreadPool::getInstance();
+    LOG_INFO("%s", "ThreadPool initializing");
 
     // 预分配HTTPConn对象，直接使用fd下标访问
     // 后续会使用结合定时器的连接管理类，当连接满时断开LRU连接
     auto conns = std::vector<std::shared_ptr<HTTPConn>>(MAX_FD, std::make_shared<HTTPConn>());
-    // int user_count = 0;
+    LOG_INFO("Preprocessing connects[%d]", MAX_FD);
 
     int listenfd = socket(PF_INET, SOCK_STREAM, 0);
     assert(listenfd >= 0);
