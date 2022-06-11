@@ -33,6 +33,6 @@ private:
     std::condition_variable cv;
 };
 
-enum MODE { REACTOR,
-            PROACTOR };
+
+
 #endif

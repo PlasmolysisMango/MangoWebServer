@@ -19,14 +19,47 @@
 #include <sys/uio.h>
 #include <stdarg.h>
 #include <errno.h>
-#include <unordered_map>
 #include "threadpool.h"
-#include "utils.h"
+#include "timer.h"
+
+struct timer_type;
 
 struct RepInfo {
     const char *title;
     const char *form;
     RepInfo(const char *_t, const char *_f = nullptr) : title(_t), form(_f) {}
+};
+
+// 两种事件处理模式，Proactor为同步模拟
+enum ACTOR_MODE { REACTOR, PROACTOR };
+// 两种触发模式
+enum TRI_MODE { LT, ET };
+
+// 将socket设置为非阻塞的函数，返回sock的原配置
+int setnonblocking(int fd);
+
+// 采用RAII的Epoll操作类
+class EpollControl {
+public:
+    EpollControl():m_epollfd(epoll_create(5)) {}
+    ~EpollControl() {
+        if (m_epollfd != -1) {
+            close(m_epollfd);
+        }
+    }
+    // 向epoll对象中添加fd, oneshot属性只影响ET，默认启用
+    void addfd(int fd, TRI_MODE tmode, bool oneshot = true);
+    // 修改fd，主要用于重置oneshot状态，只用在启用了oneshot模式的ET
+    void modfd(int fd, int ev);
+    // 移除某个fd
+    void removefd(int fd);
+    // 获取本来的epollfd
+    int getfd() const { return m_epollfd; }
+    // 设置某个fd为非阻塞
+    static int setnonblocking(int fd);
+
+private:
+    int m_epollfd = -1;
 };
 
 class HTTPConn
@@ -55,7 +88,7 @@ public:
 
 public:
     // 初始化新接收的连接
-    void init(int sockfd, ACTOR_MODE amode = PROACTOR, TRI_MODE tmode = ET, bool oneshot = true);
+    void init(int sockfd, const sockaddr_in &addr, ACTOR_MODE amode = REACTOR, TRI_MODE tmode = ET);
     // 关闭连接
     void close_conn(bool real_close = true);
     // 处理请求
@@ -96,20 +129,19 @@ private:
 
 public:
     // epoll文件描述符
-    static EpollControl &m_epoller;
+    // static int m_epollfd;
+    static EpollControl m_epoller;
     // 用户数量
     static int m_user_count;
-
-    // 事件处理模式
-    ACTOR_MODE m_actor_mode;
-    // 触发模式
     TRI_MODE m_tri_mode;
-    // oneshot模式
-    bool m_oneshot = false;
+    ACTOR_MODE m_actor_mode;
+    // 所属的定时器
+    std::shared_ptr<timer_type> m_timer;
 
 private:
     // 当前连接的socket和对应地址信息
     int m_sockfd;
+    struct sockaddr_in m_address;
     // 读缓冲区
     char m_read_buf[READ_BUFFER_SIZE];
     // 标识解析状态的参数
@@ -147,7 +179,6 @@ private:
     int m_iv_count = 0;
 };
 
-// 继承自线程池任务类的网络连接任务类，重写接口
 class HTTPReq: public WorkRequest {
 public:
     enum STATE{ READ, WRITE, NONE};
@@ -157,35 +188,6 @@ public:
 private:
     std::shared_ptr<HTTPConn> m_httpconn;
     STATE m_state = NONE;
-};
-
-// 连接管理类
-class ConnHandler
-{
-public:
-    static ConnHandler &getInstance() {
-        static ConnHandler connhdr;
-        return connhdr;
-    }
-
-    ~ConnHandler() {}
-    ConnHandler(const ConnHandler &) = delete;
-    ConnHandler(ConnHandler &&) = delete;
-    ConnHandler &operator=(const ConnHandler &) = delete;
-    ConnHandler &operator=(ConnHandler &&) = delete;
-    // 添加一个连接，成功返回对应智能指针，失败返回nullptr
-    std::shared_ptr<HTTPConn> add_conn(int connfd);
-    // 查找一个连接，成功返回对应智能指针，不存在则返回nullptr
-    std::shared_ptr<HTTPConn> find_conn(int connfd);
-    // 删除一个连接
-    bool delete_conn(int connfd);
-
-    // 维护一个删除列表，在主线程统一关闭并释放所有资源
-    std::vector<int> removed_fdlist;
-
-private:
-    ConnHandler() {}
-    std::unordered_map<int, std::shared_ptr<HTTPConn>> m_conns;
 };
 
 #endif
