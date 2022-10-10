@@ -24,8 +24,6 @@ public:
         static Log logger;
         return logger;
     }
-    // 保证析构时缓冲区的日志均已经输出
-    ~Log();
 
     Log(const Log &) = delete;
     Log &operator=(const Log &) = delete;
@@ -51,10 +49,10 @@ public:
     template <typename... Args>
     void write_log(LOG_LEVEL lv, const std::string &fmt, Args &&...args);
 
-    // 重载<<运算符
-
 private:
     Log() { }
+    // 保证析构时缓冲区的日志均已经输出
+    ~Log();
     // 保存日志文件，另开线程保证一直在工作
     static void asyncWork();
     void asyncSave();
@@ -135,9 +133,15 @@ void Log::write_log(Log::LOG_LEVEL lv, const std::string &fmt, Args &&...args)
 {
     std::lock_guard<std::mutex> lg(m_mutex);
     // 若缓冲区满，则加入当前日志，并唤醒保存线程腾空缓冲区
-    char tmp[m_maxlength];
-    sprintf(tmp, fmt.c_str(), args...);
-    std::string t(tmp);
+    std::string t;
+    if (sizeof...(args) == 0) {
+        t = fmt;
+    } else {
+        const auto size = std::snprintf(nullptr, 0, fmt.c_str(), args...) + 1;
+        const auto buffer = std::make_unique<char[]>(size);
+        std::snprintf(buffer.get(), size, fmt.c_str(), args...);
+        t = std::string(buffer.get(), buffer.get() + size - 1);
+    }
     std::string pre;
     switch(lv) {
         case(INFO): {
